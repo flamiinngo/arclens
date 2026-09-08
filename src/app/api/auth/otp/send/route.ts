@@ -16,10 +16,10 @@ const tableReady = pool.query(`
   )
 `).catch(e => console.error("[otp/send] table init:", e))
 
-const PEPPER = process.env.OTP_PEPPER || "arclens-otp-pepper-v1"
+const PEPPER = process.env.OTP_PEPPER || process.env.SESSION_SECRET || "arclens-dev-otp-pepper-v1"
 
 function hashCode(code: string): string {
-  return crypto.createHash("sha256").update(code + PEPPER).digest("hex")
+  return crypto.createHmac("sha256", PEPPER).update(code).digest("hex")
 }
 
 function brandedHTML(code: string): string {

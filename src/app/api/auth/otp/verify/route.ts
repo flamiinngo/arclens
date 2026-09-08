@@ -8,7 +8,7 @@ import { getPool } from "@/lib/dbPool"
 const pool = getPool()
 const BASE = "https://api.circle.com"
 
-const PEPPER = process.env.OTP_PEPPER || "arclens-otp-pepper-v1"
+const PEPPER = process.env.OTP_PEPPER || process.env.SESSION_SECRET || "arclens-dev-otp-pepper-v1"
 
 const CIRCLE_HEADERS = {
   "Authorization": `Bearer ${process.env.CIRCLE_API_KEY}`,
@@ -16,7 +16,7 @@ const CIRCLE_HEADERS = {
 }
 
 function hashCode(code: string): string {
-  return crypto.createHash("sha256").update(code + PEPPER).digest("hex")
+  return crypto.createHmac("sha256", PEPPER).update(code).digest("hex")
 }
 
 function hashesMatch(a: string, b: string): boolean {

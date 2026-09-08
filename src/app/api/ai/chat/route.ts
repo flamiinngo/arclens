@@ -15,11 +15,20 @@ import { buildTools } from "@/lib/aiTools"
 import { payoutForAnswer, type PayoutTrace } from "@/lib/lensPay"
 import { enforce, rateLimit, getIp } from "@/lib/ratelimit"
 import { getPool } from "@/lib/dbPool"
+import crypto from "crypto"
 
 export const runtime = "nodejs"
 export const maxDuration = 60
 
 const pool = getPool()
+
+function anonymousConversationOwner(device: string): string {
+  // The raw browser identifier never enters the database. HMAC binding means
+  // knowing a sequential conversation id cannot authorize an overwrite.
+  const secret = process.env.SESSION_SECRET || "arclens-dev-conversation-owner"
+  const stableInput = device || crypto.randomUUID()
+  return `anon:${crypto.createHmac("sha256", secret).update(stableInput).digest("hex")}`
+}
 
 interface ChatBody {
   messages: Array<{ role: "user" | "assistant"; content: string }>
@@ -109,6 +118,7 @@ export async function POST(req: NextRequest) {
   const DAY = 24 * 60 * 60 * 1000
   const device = (req.headers.get("x-arclens-device") || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64)
   const ip = getIp(req)
+  const conversationOwner = session?.addr ?? anonymousConversationOwner(device)
 
   if (session?.addr) {
     const daily = await rateLimit(`ai-daily:user:${session.addr}`, FREE_USER, DAY)
@@ -215,7 +225,7 @@ export async function POST(req: NextRequest) {
 
         const convId = await persistConversation({
           conversationId: body.conversationId ?? null,
-          userAddr: session?.addr ?? null,
+          userAddr: conversationOwner,
           route,
           role:    ctx.role,
           messages: [...body.messages, { role: "assistant", content: answerText }],
@@ -461,14 +471,15 @@ async function persistConversation(args: {
   messages:       any[]
 }): Promise<number> {
   if (args.conversationId) {
-    await pool.query(
+    const updated = await pool.query<{ id: number }>(
       `UPDATE ai_conversations
        SET messages = $2::jsonb,
            last_used_at = NOW()
-       WHERE id = $1`,
-      [args.conversationId, JSON.stringify(args.messages)],
+       WHERE id = $1 AND user_addr = $3
+       RETURNING id`,
+      [args.conversationId, JSON.stringify(args.messages), args.userAddr],
     )
-    return args.conversationId
+    if (updated.rows[0]) return updated.rows[0].id
   }
   const r = await pool.query<{ id: number }>(
     `INSERT INTO ai_conversations (user_addr, route, role, messages)

@@ -3,6 +3,7 @@ import { scanUrl } from "@/lib/urlScan"
 import { rateLimit, getIp } from "@/lib/ratelimit"
 import { getPool } from "@/lib/dbPool"
 import { matchesDefaultTemplate } from "@/lib/campaignTypes"
+import { getSession } from "@/lib/session"
 
 const pool = getPool()
 
@@ -15,6 +16,10 @@ export async function GET(req: NextRequest) {
   const status  = searchParams.get("status")  || "active"
 
   try {
+    const session = getSession(req)
+    if (creator && (!session || session.addr !== creator.toLowerCase())) {
+      return NextResponse.json({ error: "Sign in with the creator wallet first" }, { status: 401 })
+    }
     // Expire campaigns past their deadline OR at-capacity — fire and forget,
     // never blocks the response. Also stamps ended_at/ended_reason so the UI
     // can show "Ended on X (slots filled)" instead of just "active forever".
@@ -104,7 +109,7 @@ export async function GET(req: NextRequest) {
       stats:      statsRes.rows[0],
       reputation: repRes.rows[0] || null,
     }, {
-      headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60" },
+      headers: { "Cache-Control": creator ? "no-store" : "public, s-maxage=30, stale-while-revalidate=60" },
     })
   } catch {
     return NextResponse.json({ campaigns: [], stats: null, reputation: null })
@@ -123,6 +128,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const session = getSession(req)
+    if (!session) return NextResponse.json({ error: "Sign in with your wallet first" }, { status: 401 })
+    const creator_wallet = session.addr
     const body = await req.json()
     const {
       title, tagline, description, type,
@@ -134,7 +142,7 @@ export async function POST(req: NextRequest) {
       banner_position,
       app_url,
       total_slots, is_fcfs, min_rank,
-      project_id, creator_wallet,
+      project_id,
       expires_at,
       invite_codes, invite_codes_note,
       max_xp_per_completion, xp_mode,
@@ -142,7 +150,6 @@ export async function POST(req: NextRequest) {
 
     if (!title?.trim())         return NextResponse.json({ error: "Title required" }, { status: 400 })
     if (!description?.trim())   return NextResponse.json({ error: "Description required" }, { status: 400 })
-    if (!creator_wallet?.trim()) return NextResponse.json({ error: "Wallet required" }, { status: 400 })
     if (!tasks?.length)         return NextResponse.json({ error: "At least one task required" }, { status: 400 })
     if (!review_questions?.length) return NextResponse.json({ error: "At least one review question required" }, { status: 400 })
 

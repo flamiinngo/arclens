@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getPool } from "@/lib/dbPool"
+import { enforce } from "@/lib/ratelimit"
+import { readOtpProof } from "@/lib/session"
 
 const pool = getPool()
 const BASE = "https://api.circle.com"
@@ -31,10 +33,15 @@ async function fetchCircleWallet(userToken: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const blocked = await enforce(req, "circle-session", { limit: 10, windowMs: 60_000 })
+  if (blocked) return blocked
   try {
     const { email } = await req.json()
     if (!email) return NextResponse.json({ error: "Email required" }, { status: 400 })
     const lower = String(email).toLowerCase().trim()
+    if (readOtpProof(req) !== lower) {
+      return NextResponse.json({ error: "Verify the code sent to your email first" }, { status: 401 })
+    }
 
     const row = await pool.query(
       "SELECT circle_user_id, wallet_id, wallet_address FROM circle_wallet_users WHERE email = $1",

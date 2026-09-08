@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { enforce } from "@/lib/ratelimit"
 import { getSession } from "@/lib/session"
 import { getPool } from "@/lib/dbPool"
+import { hasAdminAuthorization } from "@/lib/adminAuth"
 
 const pool = getPool()
 
@@ -23,7 +24,8 @@ const MATERIAL = new Set(["title", "expires_at", "total_slots", "contract_addres
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const walletParam = req.nextUrl.searchParams.get("wallet")
+  const session = getSession(req)
+  const isAdmin = hasAdminAuthorization(req)
 
   const isNumeric = /^\d+$/.test(id)
   const whereClause = isNumeric ? "c.id = $1" : "c.slug = $1"
@@ -80,6 +82,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const campaignId = campaignRes.rows[0].id
     const creatorWallet = campaignRes.rows[0].creator_wallet
+    const isCreator = !!(session && creatorWallet && session.addr === String(creatorWallet).toLowerCase())
+    const canReviewAll = isCreator || isAdmin
 
     // Auto-finalize: if a founder hasn't rated within 7 days, fall back to the
     // tester's provisional_score (derived from auto_score at submission time)
@@ -113,31 +117,65 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // campaigns (Tower had 56 submissions silently dropped at LIMIT 50) show
     // every tester.
     const completionsRes = await pool.query(
-      `SELECT tester_wallet, auto_score, builder_rating, quality_score, status,
-              reward_delivered, review_answers, task_proofs, contract_verified,
-              xp_earned, per_question_ratings, created_at
-       FROM campaign_completions WHERE campaign_id = $1
-       ORDER BY created_at DESC LIMIT 500`,
-      [campaignId]
+      canReviewAll
+        ? `SELECT tester_wallet, auto_score, builder_rating, quality_score, status,
+                  reward_delivered, review_answers, task_proofs, contract_verified,
+                  xp_earned, per_question_ratings, created_at
+             FROM campaign_completions WHERE campaign_id = $1
+             ORDER BY created_at DESC LIMIT 500`
+        : `SELECT tester_wallet, builder_rating, quality_score, status,
+                  reward_delivered, xp_earned, created_at
+             FROM campaign_completions WHERE campaign_id = $1
+             ORDER BY created_at DESC LIMIT 500`,
+      [campaignId],
     )
+
+    // A signed-in tester can see their own submitted answers/proofs, but never
+    // another tester's. The creator can see all submissions for moderation.
+    if (!canReviewAll && session) {
+      const own = await pool.query(
+        `SELECT tester_wallet, auto_score, builder_rating, quality_score, status,
+                reward_delivered, review_answers, task_proofs, contract_verified,
+                xp_earned, per_question_ratings, created_at
+           FROM campaign_completions
+          WHERE campaign_id = $1 AND LOWER(tester_wallet) = $2
+          LIMIT 1`,
+        [campaignId, session.addr],
+      )
+      if (own.rows[0]) {
+        const index = completionsRes.rows.findIndex(r => String(r.tester_wallet).toLowerCase() === session.addr)
+        if (index >= 0) completionsRes.rows[index] = own.rows[0]
+      }
+    }
 
     // Return the most recent pending or rejected edit request to the creator
     let pendingUpdate = null
-    if (walletParam && creatorWallet?.toLowerCase() === walletParam.toLowerCase()) {
+    if (isCreator) {
       try {
         const upd = await pool.query(
           `SELECT id, proposed_changes, status, submitted_at, admin_note
            FROM pending_campaign_updates
            WHERE campaign_id = $1 AND requester_wallet = $2 AND status IN ('pending','rejected')
            ORDER BY submitted_at DESC LIMIT 1`,
-          [campaignId, walletParam.toLowerCase()]
+          [campaignId, session!.addr]
         )
         if (upd.rows.length > 0) pendingUpdate = upd.rows[0]
       } catch { }
     }
 
+    const campaign = { ...campaignRes.rows[0] }
+    if (!session && !isAdmin) {
+      delete campaign.invite_codes
+      delete campaign.invite_codes_note
+    }
+    if (!canReviewAll) {
+      delete campaign.deposit_tx_hash
+      delete campaign.rejection_reason
+      delete campaign.admin_note
+    }
+
     return NextResponse.json({
-      campaign:    campaignRes.rows[0],
+      campaign,
       completions: completionsRes.rows,
       pendingUpdate,
     }, { headers: { "Cache-Control": "no-store" } })
@@ -375,14 +413,16 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   try {
-    const { deposit_tx_hash, creator_wallet } = await req.json()
-    if (!deposit_tx_hash || !creator_wallet) return NextResponse.json({ error: "Missing fields" }, { status: 400 })
+    const { deposit_tx_hash } = await req.json()
+    if (!deposit_tx_hash) return NextResponse.json({ error: "Missing deposit transaction" }, { status: 400 })
+    const session = getSession(req)
+    if (!session) return NextResponse.json({ error: "Sign in with the campaign creator wallet first" }, { status: 401 })
 
     const result = await pool.query(
       `UPDATE campaigns SET deposit_tx_hash = $1, status = 'active'
        WHERE id = $2 AND creator_wallet = $3 AND status = 'approved'
        RETURNING id`,
-      [deposit_tx_hash, id, creator_wallet.toLowerCase()]
+      [deposit_tx_hash, id, session.addr]
     )
     if (!result.rows.length) return NextResponse.json({ error: "Campaign not found, not owned by wallet, or not awaiting funding" }, { status: 404 })
     return NextResponse.json({ success: true })

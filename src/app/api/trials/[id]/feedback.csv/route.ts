@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { getPool } from "@/lib/dbPool"
+import { getSession } from "@/lib/session"
 
 const pool = getPool()
 
@@ -34,7 +35,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params
   const isNumeric = /^\d+$/.test(id)
   const whereClause = isNumeric ? "id = $1" : "slug = $1"
-  const wallet = (req.nextUrl.searchParams.get("wallet") || "").trim().toLowerCase()
+  const session = getSession(req)
 
   try {
     const campRes = await pool.query(
@@ -44,8 +45,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     )
     const camp = campRes.rows[0]
     if (!camp) return NextResponse.json({ error: "Campaign not found" }, { status: 404 })
-    if (!wallet || camp.creator_wallet?.toLowerCase() !== wallet) {
-      return NextResponse.json({ error: "Only the campaign creator can export feedback" }, { status: 403 })
+    if (!session || camp.creator_wallet?.toLowerCase() !== session.addr) {
+      return NextResponse.json({ error: "Only the signed-in campaign creator can export feedback" }, { status: 403 })
     }
 
     const questions: { id: string; label: string }[] = Array.isArray(camp.review_questions) ? camp.review_questions : []

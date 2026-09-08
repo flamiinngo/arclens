@@ -106,14 +106,12 @@ const premiumReady = pool.query(`
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())
 `).catch(e => console.error("[lensPay] premium init:", e?.message || e))
 
-// Verify a premium payment proof from the client. SIMULATION: any truthy proof
-// passes (so the flow is demoable). LIVE: verify the x402 EIP-3009 authorization
-// via Circle's facilitator before granting the call.
+// Legacy local-demo proof. It is deliberately impossible to enable in
+// production; production access must pass real x402 verification/settlement.
 export async function verifyPremiumPayment(proof: string): Promise<boolean> {
-  if (!proof) return false
-  if (!payoutsLive()) return true
-  // TODO (live): verify the x402 payment authorization via the Circle facilitator.
-  return true
+  return process.env.NODE_ENV !== "production" &&
+    process.env.ALLOW_DEMO_PAYMENTS === "true" &&
+    proof === "sim"
 }
 
 export async function recordPremiumCall(askerId: string | null, amountE6 = PREMIUM_PRICE_E6, txHash: string | null = null): Promise<void> {

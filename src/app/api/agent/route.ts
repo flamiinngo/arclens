@@ -48,7 +48,7 @@ const MANIFEST = {
   token: "USDC",
   price: premiumPriceUsd,
   price_e6: premiumPriceE6,
-  pay_header: "x-lens-pay",
+  pay_header: "payment-signature",
   actions: {
     trust:    { description: "Trust verdict for a project on Arc.", params: { target: "project name or slug" } },
     discover: { description: "Find Arc projects, optionally trusted-only.", params: { category: "optional", trusted_only: "optional bool", limit: "1-20 (default 8)" } },
@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
 
   // x402 — pay per call. Real Circle Gateway settlement when a standard
   // `payment-signature` header is present (and SELLER_ADDRESS configured);
-  // otherwise the `x-lens-pay` demo proof. No payment → 402 with the price.
+  // otherwise a local-development-only demo proof. No payment → 402.
   const sig = req.headers.get("payment-signature") || ""
   let paid = false
   let settledTx: string | null = null

@@ -21,7 +21,10 @@ const COOKIE_NAME     = "arclens-session"
 function secret(): Buffer {
   const s = process.env.SESSION_SECRET || ""
   if (!s || s.length < 32) {
-    // Dev fallback. Set SESSION_SECRET in Vercel for prod.
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SESSION_SECRET must be configured with at least 32 characters")
+    }
+    // Local-development fallback only.
     return crypto.createHash("sha256").update("arclens-dev-session-fallback-do-not-use-in-prod").digest()
   }
   return crypto.createHash("sha256").update(s).digest()

@@ -167,10 +167,10 @@ export default function ArcLayout({ children, active, lockDark }: { children: Re
 
     // Establish a signed session cookie so subsequent protected edits
     // (builder profile, founder claim) don't need another wallet popup.
-    establishSession(addr.toLowerCase(), type).catch(() => {})
+    await establishSession(addr.toLowerCase(), type)
 
     try {
-      const r = await fetch("/api/claim", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: addr }) })
+      const r = await fetch("/api/claim", { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ wallet: addr }) })
       const d = await r.json()
       if (d.projects?.length > 0) {
         const p = d.projects[0]

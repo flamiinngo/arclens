@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { randomBytes } from "crypto"
 import { attestOnChain, subjectFor } from "@/lib/registry"
 import { getPool } from "@/lib/dbPool"
+import { createUnsubscribeToken } from "@/lib/unsubscribeToken"
+import { attachSessionCookie, getSession } from "@/lib/session"
 
 const pool = getPool()
 
@@ -43,7 +45,7 @@ export async function POST(req: NextRequest) {
     )
     const base = process.env.NEXT_PUBLIC_BASE_URL || "https://arclenz.xyz"
     const dashboardUrl = `${base}/activate/${project.slug || project.id}?token=${token}`
-    const unsubUrl = `${base}/api/unsubscribe?email=${encodeURIComponent(email.trim())}`
+    const unsubUrl = `${base}/api/unsubscribe?token=${encodeURIComponent(createUnsubscribeToken(email.trim()))}`
     try {
       const { Resend } = await import("resend")
       const resend = new Resend(process.env.RESEND_API_KEY || "")
@@ -71,6 +73,10 @@ export async function GET(req: NextRequest) {
     if (!slug) return NextResponse.json({ error: "Missing slug" }, { status: 400 })
     let projectRow: any = null
     if (wallet) {
+      const session = getSession(req)
+      if (!session || session.addr !== wallet.toLowerCase()) {
+        return NextResponse.json({ error: "Sign in with this wallet first" }, { status: 401 })
+      }
       const result = await pool.query(
         `SELECT id, name, slug, tagline, description, category, logo_url, website, twitter, github, discord, contract, contracts, founder_social, featured, badge, color, email, claimed_at, view_count, owner_wallet, city, country, trust_level, recognition, established FROM projects WHERE (slug = $1 OR id::text = $1) AND owner_wallet = $2 AND approved = true AND live = true`,
         [slug, wallet.toLowerCase()]
@@ -85,6 +91,26 @@ export async function GET(req: NextRequest) {
       if (result.rows.length === 0) return NextResponse.json({ error: "Invalid or expired token" }, { status: 403 })
       if (new Date(result.rows[0].claim_token_expires) < new Date()) return NextResponse.json({ error: "Token expired" }, { status: 403 })
       projectRow = result.rows[0]
+      if (projectRow.owner_wallet) {
+        const session = getSession(req)
+        if (!session || session.addr !== String(projectRow.owner_wallet).toLowerCase()) {
+          return NextResponse.json({ error: "This activation link has already been used. Sign in with the owner wallet." }, { status: 401 })
+        }
+      } else {
+        // A claim link may identify the listing being activated, but it must not
+        // expose founder email, reviews, analytics, or other dashboard data.
+        return NextResponse.json({
+          project: {
+            id: projectRow.id,
+            name: projectRow.name,
+            slug: projectRow.slug,
+            logo_url: projectRow.logo_url,
+            category: projectRow.category,
+            owner_wallet: null,
+          },
+          hasWallet: false,
+        }, { headers: { "Cache-Control": "no-store" } })
+      }
       // Do NOT set claimed_at here. The link being opened is not a claim;
       // claimed_at flips when the wallet is actually attached in PUT below.
     } else {
@@ -171,14 +197,7 @@ async function verifyFounderAuth(
   }
 
   if (auth.type === "circle") {
-    const email = String(auth.email || "").toLowerCase().trim()
-    if (!email) return { ok: false, error: "Circle session missing email" }
-    const row = await pool.query(
-      "SELECT 1 FROM circle_wallet_users WHERE email = $1 AND LOWER(wallet_address) = $2",
-      [email, addr]
-    )
-    if (!row.rows.length) return { ok: false, error: "This Circle account doesn't own that wallet" }
-    return { ok: true }
+    return { ok: false, error: "Sign in with the Circle email code first" }
   }
 
   return { ok: false, error: "Unknown auth type" }
@@ -219,7 +238,6 @@ export async function PUT(req: NextRequest) {
 
     // Tamper-proof: token alone is no longer enough — must prove wallet ownership.
     // Accept either a valid session cookie for this address or a fresh signature.
-    const { getSession } = await import("@/lib/session")
     const sess = getSession(req)
     if (!sess || sess.addr !== addr) {
       const authResult = await verifyFounderAuth(result.rows[0].name, addr, auth)
@@ -233,9 +251,11 @@ export async function PUT(req: NextRequest) {
     // ladder to 'claimed' (a real owner controls the listing) — objective, no
     // manual step. Recognition (Arc Partner/Official) outranks and is left alone.
     await pool.query(
-      `UPDATE projects SET
+       `UPDATE projects SET
          owner_wallet = $1,
          claimed_at   = COALESCE(claimed_at, NOW()),
+         claim_token = NULL,
+         claim_token_expires = NULL,
          trust_level  = CASE WHEN trust_level = 'listed' OR trust_level IS NULL THEN 'claimed' ELSE trust_level END
        WHERE id = $2`,
       [addr, result.rows[0].id]
@@ -259,7 +279,11 @@ export async function PUT(req: NextRequest) {
       }
     } catch {}
 
-    return NextResponse.json({ success: true })
+    const response = NextResponse.json({ success: true })
+    if (!sess || sess.addr !== addr) {
+      attachSessionCookie(response, { addr, type: auth?.type === "circle" ? "circle" : "wallet" })
+    }
+    return response
   } catch (err) { console.error("[Claim PUT]", err); return NextResponse.json({ error: "Server error" }, { status: 500 }) }
 }
 
@@ -267,9 +291,14 @@ export async function PATCH(req: NextRequest) {
   try {
     const { wallet } = await req.json()
     if (!wallet) return NextResponse.json({ error: "Missing wallet" }, { status: 400 })
+    const addr = String(wallet).toLowerCase()
+    const session = getSession(req)
+    if (!session || session.addr !== addr) {
+      return NextResponse.json({ error: "Sign in with this wallet first" }, { status: 401 })
+    }
     const result = await pool.query(
-      `SELECT id, name, slug, tagline, category, logo_url, website, twitter, github, discord, contract, founder_social, featured, badge, color, email, claimed_at, view_count, owner_wallet FROM projects WHERE owner_wallet = $1 AND approved = true AND live = true`,
-      [wallet.toLowerCase()]
+      `SELECT id, name, slug FROM projects WHERE owner_wallet = $1 AND approved = true AND live = true`,
+      [addr]
     )
     return NextResponse.json({ projects: result.rows })
   } catch (err) { console.error("[Claim PATCH]", err); return NextResponse.json({ error: "Server error" }, { status: 500 }) }

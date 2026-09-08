@@ -336,9 +336,7 @@ export default function CampaignDetailPage() {
   async function load() {
     setLoading(true)
     try {
-      const w    = useArcStore.getState().walletAddr
-      const qs   = w ? `?wallet=${encodeURIComponent(w)}` : ""
-      const res  = await fetch(`/api/trials/${id}${qs}`)
+      const res  = await fetch(`/api/trials/${id}`, { credentials: "include" })
       const data = await res.json()
       if (data.campaign) {
         setCampaign(data.campaign)
@@ -542,7 +540,7 @@ export default function CampaignDetailPage() {
       // If anything went live immediately, refresh the page state
       if (data.appliedInstant && data.appliedInstant > 0) {
         try {
-          const r = await fetch(`/api/trials/${id}?wallet=${wallet}`, { cache: "no-store" })
+          const r = await fetch(`/api/trials/${id}`, { cache: "no-store", credentials: "include" })
           const d = await r.json()
           if (d.campaign) setCampaign(d.campaign)
           if (d.pendingUpdate !== undefined) setPendingUpdate(d.pendingUpdate)
@@ -1378,7 +1376,7 @@ export default function CampaignDetailPage() {
 
             {/* ── Owner: export feedback as CSV ── */}
             {isOwner && completions.length > 0 && (
-              <a href={`/api/trials/${campaign.slug || campaign.id}/feedback.csv?wallet=${encodeURIComponent(wallet || "")}`}
+              <a href={`/api/trials/${campaign.slug || campaign.id}/feedback.csv`}
                 download
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "13px 18px",
                   background: "var(--surf,#0a0e1a)", border: "1px solid var(--bdr,rgba(255,255,255,0.06))", borderRadius: 10,

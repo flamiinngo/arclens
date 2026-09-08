@@ -1030,7 +1030,7 @@ export default function DashboardPage() {
                             ))}
                           </div>
                           {completions.length > 0 && (
-                            <a href={`/api/trials/${camp.slug || camp.id}/feedback.csv?wallet=${encodeURIComponent(connectedWallet || "")}`}
+                            <a href={`/api/trials/${camp.slug || camp.id}/feedback.csv`}
                               download
                               onMouseEnter={e => { e.currentTarget.style.borderColor = "#00d990"; e.currentTarget.style.color = t1 }}
                               onMouseLeave={e => { e.currentTarget.style.borderColor = bdr; e.currentTarget.style.color = t2 }}

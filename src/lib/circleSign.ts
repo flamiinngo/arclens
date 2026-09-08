@@ -53,6 +53,7 @@ async function runSDKChallenge(userToken: string, encryptionKey: string, challen
 export async function circleSignMessage(email: string, message: string): Promise<string> {
   const res  = await fetch("/api/auth/circle/sign/message", {
     method:  "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ email, message }),
   })
@@ -73,6 +74,7 @@ export async function circleSendTransaction(
 ): Promise<string> {
   const res  = await fetch("/api/auth/circle/sign/transaction", {
     method:  "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ email, contractAddress, abiFunctionSignature, abiParameters }),
   })
@@ -85,6 +87,7 @@ export async function circleSendTransaction(
   await new Promise(r => setTimeout(r, 2000))
   const txRes  = await fetch("/api/auth/circle/tx/latest", {
     method:  "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ email }),
   })

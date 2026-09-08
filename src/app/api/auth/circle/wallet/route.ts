@@ -22,6 +22,9 @@ export async function POST(req: NextRequest) {
     const { email } = await req.json()
     if (!email) return NextResponse.json({ error: "Email required" }, { status: 400 })
     const lower = String(email).toLowerCase().trim()
+    if (readOtpProof(req) !== lower) {
+      return NextResponse.json({ error: "Verify the code sent to your email first" }, { status: 401 })
+    }
 
     const row = await pool.query(
       "SELECT circle_user_id, wallet_id, wallet_address FROM circle_wallet_users WHERE email = $1",
@@ -36,7 +39,7 @@ export async function POST(req: NextRequest) {
       const res  = NextResponse.json({ address: addr })
       // Only mint a session when this same browser just proved the email via OTP.
       // (Returning the address itself is harmless — wallet addresses are public.)
-      if (readOtpProof(req) === lower) attachSessionCookie(res, { addr, type: "circle" })
+      attachSessionCookie(res, { addr, type: "circle" })
       return res
     }
 
@@ -75,7 +78,7 @@ export async function POST(req: NextRequest) {
     )
 
     const res = NextResponse.json({ address })
-    if (readOtpProof(req) === lower) attachSessionCookie(res, { addr: address, type: "circle" })
+    attachSessionCookie(res, { addr: address, type: "circle" })
     return res
   } catch (e) {
     console.error("[circle/wallet]", e)

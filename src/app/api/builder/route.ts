@@ -41,14 +41,7 @@ async function verifyClaimAuth(addr: string, auth: any): Promise<{ ok: boolean; 
   }
 
   if (auth.type === "circle") {
-    const email = String(auth.email || "").toLowerCase().trim()
-    if (!email) return { ok: false, error: "Circle session missing email" }
-    const row = await pool.query(
-      "SELECT 1 FROM circle_wallet_users WHERE email = $1 AND LOWER(wallet_address) = $2",
-      [email, addr]
-    )
-    if (!row.rows.length) return { ok: false, error: "This Circle account doesn't own that wallet" }
-    return { ok: true }
+    return { ok: false, error: "Sign in with the Circle email code first" }
   }
 
   return { ok: false, error: "Unknown auth type" }
@@ -97,6 +90,8 @@ export async function GET(req: NextRequest) {
 
   try {
     await ensureTable()
+    const session = getSession(req)
+    const isOwner = session?.addr === address
 
     const [profileRes, projectsRes, pendingRes] = await Promise.all([
       pool.query(`SELECT * FROM builder_profiles WHERE address = $1`, [address]),
@@ -110,7 +105,7 @@ export async function GET(req: NextRequest) {
       // Detect pending projects via either source of email truth:
       // 1. Email on a project they already claimed (owner_wallet = address)
       // 2. Email they entered directly on their builder profile
-      pool.query(
+      isOwner ? pool.query(
         `SELECT id, name, slug FROM projects
          WHERE owner_wallet IS NULL
            AND approved = true AND live = true
@@ -122,7 +117,7 @@ export async function GET(req: NextRequest) {
              WHERE address = $1 AND email IS NOT NULL
            )`,
         [address]
-      ),
+      ) : Promise.resolve({ rows: [] }),
     ])
 
     const profile = profileRes.rows[0] || null
@@ -170,7 +165,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       // email is intentionally excluded from the public response — private field
       profile: profile ? { ...profile, email: undefined } : null,
-      hasSubmissionEmail: !!profile?.email,
+      hasSubmissionEmail: isOwner && !!profile?.email,
       projects:           projectsRes.rows,
       pendingProjects:    pendingRes.rows,
       stats: {
@@ -179,7 +174,7 @@ export async function GET(req: NextRequest) {
         contractActivity,
         firstSeen,
       },
-    }, { headers: { "Cache-Control": "public, s-maxage=60, stale-while-revalidate=120" } })
+    }, { headers: { "Cache-Control": isOwner ? "no-store" : "public, s-maxage=60, stale-while-revalidate=120" } })
   } catch (err) {
     console.error("[Builder GET]", err)
     return NextResponse.json({ error: "Server error" }, { status: 500 })

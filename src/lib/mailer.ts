@@ -7,6 +7,7 @@
 // that working path.
 import { Resend } from "resend"
 import { getPool } from "@/lib/dbPool"
+import { createUnsubscribeToken } from "@/lib/unsubscribeToken"
 
 const pool = getPool()
 
@@ -33,7 +34,7 @@ export async function sendEmail(opts: Parameters<Resend["emails"]["send"]>[0]) {
 }
 
 export function unsubFooter(email: string) {
-  const link = `${BASE_URL}/api/unsubscribe?email=${encodeURIComponent(email)}`
+  const link = `${BASE_URL}/api/unsubscribe?token=${encodeURIComponent(createUnsubscribeToken(email))}`
   return `<hr style="border:none;border-top:1px solid rgba(255,255,255,0.06);margin:32px 0;">
     <p style="font-size:11px;color:#1e2a40;text-align:center;line-height:1.8;">
       You're receiving this because you submitted a project or campaign on ArcLens.<br>
@@ -42,7 +43,7 @@ export function unsubFooter(email: string) {
 }
 
 export function unsubHeaders(email: string) {
-  const url = `${BASE_URL}/api/unsubscribe?email=${encodeURIComponent(email)}`
+  const url = `${BASE_URL}/api/unsubscribe?token=${encodeURIComponent(createUnsubscribeToken(email))}`
   return {
     "List-Unsubscribe": `<${url}>, <mailto:support@mail.arclenz.xyz?subject=unsubscribe&body=${encodeURIComponent(email)}>`,
     "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",

@@ -124,7 +124,10 @@ export default function AdminPage() {
     setSubsData(null)
     setSubsExpandedTester(new Set())
     try {
-      const res = await fetch(`/api/trials/${campaignId}`, { cache: "no-store" })
+      const res = await fetch(`/api/trials/${campaignId}`, {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${password}` },
+      })
       const data = await res.json()
       if (data?.campaign) setSubsData({ campaign: data.campaign, completions: data.completions || [] })
     } finally { setSubsLoading(false) }
@@ -2885,4 +2888,3 @@ function EmptyState({ icon, title, sub }: { icon: string; title: string; sub: st
     </div>
   )
 }
-

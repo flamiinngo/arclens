@@ -37,6 +37,8 @@ export default function ActivatePage() {
   const [imgErr, setImgErr]           = useState(false)
   const [mounted, setMounted]         = useState(false)
   const [emailInput, setEmailInput]   = useState("")
+  const [otpCode, setOtpCode]         = useState("")
+  const [circleStage, setCircleStage] = useState<"email" | "code">("email")
   const [circleLoading, setCircleLoading] = useState(false)
   const sdkRef = useRef<any>(null)
 
@@ -71,22 +73,36 @@ export default function ActivatePage() {
         const res  = await fetch(`/api/claim?slug=${slug}&token=${token}`)
         const data = await res.json()
         if (!res.ok) { setError(data.error || "Invalid or expired link"); setLoading(false); return }
-        // Preserve the token so the dashboard authenticates via the magic link
-        // when the user isn't on the same device/wallet they originally used.
-        if (data.project.owner_wallet) { router.replace(`/dashboard/${slug}?token=${token}`); return }
+        if (data.project.owner_wallet) { router.replace(`/dashboard/${slug}`); return }
         setProject(data.project)
 
-        // Check Circle wallet in localStorage first, then MetaMask
+        // Local storage suggests an address; the signed cookie confirms it.
+        const session = await fetch("/api/auth/session", { credentials: "include" }).then(r => r.json()).catch(() => null)
         const savedType = localStorage.getItem("arclens-wallet-type")
         const savedAddr = localStorage.getItem("arclens-wallet")
         if (savedType === "circle" && savedAddr) {
-          setWallet(savedAddr)
-          setStep("sign")
+          if (session?.signedIn && session.address?.toLowerCase() === savedAddr.toLowerCase()) {
+            setWallet(savedAddr)
+            setStep("linking")
+            await linkWallet(savedAddr.toLowerCase(), { type: "circle" })
+            return
+          }
+          setEmailInput(localStorage.getItem("arclens-circle-email") || "")
+          setStep("connect")
         } else {
           try {
             if ((window as any).ethereum) {
               const accounts = await (window as any).ethereum.request({ method: "eth_accounts" })
-              if (accounts?.[0]) { setWallet(accounts[0]); setStep("sign") }
+              if (accounts?.[0]) {
+                const addr = String(accounts[0]).toLowerCase()
+                setWallet(addr)
+                if (session?.signedIn && session.address?.toLowerCase() === addr) {
+                  setStep("linking")
+                  await linkWallet(addr, { type: "wallet" })
+                  return
+                }
+                setStep("sign")
+              }
             }
           } catch { }
         }
@@ -119,15 +135,43 @@ export default function ActivatePage() {
     setActionError("")
     setCircleLoading(true)
     try {
-      const sessionRes = await fetch("/api/auth/circle/session", {
+      if (circleStage === "email") {
+        const sendRes = await fetch("/api/auth/otp/send", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: emailInput }),
+        })
+        const sent = await sendRes.json()
+        if (!sendRes.ok) { setActionError(sent.error || "Failed to send verification code"); setCircleLoading(false); return }
+        setCircleStage("code")
+        setCircleLoading(false)
+        return
+      }
+
+      const code = otpCode.replace(/\D/g, "")
+      if (!/^\d{6}$/.test(code)) { setActionError("Enter the 6-digit code from your email"); setCircleLoading(false); return }
+      const sessionRes = await fetch("/api/auth/otp/verify", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: emailInput }),
+        body: JSON.stringify({ email: emailInput, code }),
       })
       const session = await sessionRes.json()
-      if (!sessionRes.ok) { setActionError(session.error || "Failed to start session"); setCircleLoading(false); return }
+      if (!sessionRes.ok) { setActionError(session.error || "Verification failed"); setCircleLoading(false); return }
 
-      const { userToken, encryptionKey, challengeId, address: resolvedAddr } = session
+      const { userToken, encryptionKey, challengeId, address: resolvedAddr, needsPinSetup } = session
+      if (resolvedAddr && !needsPinSetup) {
+        const addr = String(resolvedAddr).toLowerCase()
+        localStorage.setItem("arclens-wallet-type", "circle")
+        localStorage.setItem("arclens-circle-email", emailInput)
+        localStorage.setItem("arclens-wallet", addr)
+        setWallet(addr)
+        setStep("linking")
+        await linkWallet(addr, { type: "circle", email: emailInput })
+        return
+      }
+
       const appId = process.env.NEXT_PUBLIC_CIRCLE_APP_ID!
       const { W3SSdk } = await import("@circle-fin/w3s-pw-web-sdk")
 
@@ -170,6 +214,7 @@ export default function ActivatePage() {
       if (!addr) {
         const walletRes = await fetch("/api/auth/circle/wallet", {
           method: "POST",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: emailInput }),
         })
@@ -206,6 +251,7 @@ export default function ActivatePage() {
   async function linkWallet(addr: string, auth: any) {
     const res  = await fetch("/api/claim", {
       method: "PUT",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token, slug, wallet: addr, auth }),
     })
@@ -217,9 +263,8 @@ export default function ActivatePage() {
       return
     }
     setStep("done")
-    // Keep the token in the URL — gives the dashboard a fallback auth path
-    // if the wallet auth attempt hasn't completed yet on first paint.
-    setTimeout(() => router.replace(`/dashboard/${slug}?token=${token}`), 2000)
+    // The secure session is ready, so the one-time claim token leaves the URL.
+    setTimeout(() => router.replace(`/dashboard/${slug}`), 2000)
   }
 
   async function signAndActivate() {
@@ -353,13 +398,18 @@ export default function ActivatePage() {
                   </div>
 
                   {/* Circle email option */}
-                  <div style={{ fontSize: 11, fontFamily: mono, color: t3, marginBottom: 8 }}>Continue with email wallet</div>
+                  <div style={{ fontSize: 11, fontFamily: mono, color: t3, marginBottom: 8 }}>
+                    {circleStage === "email" ? "Continue with email wallet" : `Code sent to ${emailInput}`}
+                  </div>
                   <input
-                    type="email"
-                    value={emailInput}
-                    onChange={e => setEmailInput(e.target.value)}
+                    type={circleStage === "email" ? "email" : "text"}
+                    inputMode={circleStage === "code" ? "numeric" : undefined}
+                    autoComplete={circleStage === "code" ? "one-time-code" : "email"}
+                    maxLength={circleStage === "code" ? 6 : undefined}
+                    value={circleStage === "email" ? emailInput : otpCode}
+                    onChange={e => circleStage === "email" ? setEmailInput(e.target.value) : setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
                     onKeyDown={e => e.key === "Enter" && !circleLoading && connectWithCircle()}
-                    placeholder="you@example.com"
+                    placeholder={circleStage === "email" ? "you@example.com" : "000000"}
                     disabled={circleLoading}
                     style={{ width: "100%", height: 40, background: "rgba(255,255,255,0.03)", border: "1px solid " + bdr, borderRadius: 8, padding: "0 12px", fontSize: 13, fontFamily: mono, color: t1, outline: "none", marginBottom: 10, boxSizing: "border-box" }}
                   />
@@ -368,10 +418,16 @@ export default function ActivatePage() {
                     {circleLoading ? (
                       <>
                         <div style={{ width: 16, height: 16, borderRadius: "50%", border: "2px solid rgba(255,255,255,0.25)", borderTopColor: "#fff", animation: "activateSpin 0.8s linear infinite" }} />
-                        Opening secure window…
+                        {circleStage === "email" ? "Sending code…" : "Verifying…"}
                       </>
-                    ) : "Continue with Email →"}
+                    ) : circleStage === "email" ? "Send verification code →" : "Verify & continue →"}
                   </button>
+                  {circleStage === "code" && !circleLoading && (
+                    <button type="button" onClick={() => { setCircleStage("email"); setOtpCode(""); setActionError("") }}
+                      style={{ width: "100%", marginTop: 10, border: 0, background: "transparent", color: t2, fontFamily: mono, fontSize: 11, cursor: "pointer" }}>
+                      Use a different email
+                    </button>
+                  )}
                 </>
               )}
 

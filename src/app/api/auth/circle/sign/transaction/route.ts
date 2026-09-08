@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { enforce } from "@/lib/ratelimit"
-import { getPool } from "@/lib/dbPool"
-
-const pool = getPool()
+import { authorizeCircleUser } from "@/lib/circleAuth"
 const BASE = "https://api.circle.com"
 
 function apiHeaders(userToken?: string) {
@@ -24,15 +22,21 @@ export async function POST(req: NextRequest) {
     if (!email || !contractAddress || !abiFunctionSignature)
       return NextResponse.json({ error: "email, contractAddress, abiFunctionSignature required" }, { status: 400 })
     const lower = String(email).toLowerCase().trim()
+    if (!/^0x[a-fA-F0-9]{40}$/.test(String(contractAddress))) {
+      return NextResponse.json({ error: "Invalid contract address" }, { status: 400 })
+    }
+    const allowedFunctions = new Set(["transfer(address,uint256)", "approve(address,uint256)"])
+    if (!allowedFunctions.has(String(abiFunctionSignature))) {
+      return NextResponse.json({ error: "Unsupported transaction type" }, { status: 400 })
+    }
+    if (!Array.isArray(abiParameters) || abiParameters.length !== 2 || abiParameters.some(v => typeof v !== "string" || v.length > 100)) {
+      return NextResponse.json({ error: "Invalid transaction parameters" }, { status: 400 })
+    }
+    const user = await authorizeCircleUser(req, lower, { requireWallet: true })
+    if (!user) return NextResponse.json({ error: "Sign in with this Circle wallet first" }, { status: 401 })
 
-    const row = await pool.query(
-      "SELECT circle_user_id, wallet_id FROM circle_wallet_users WHERE email=$1",
-      [lower]
-    )
-    if (!row.rows.length || !row.rows[0].wallet_id)
-      return NextResponse.json({ error: "Circle wallet not set up" }, { status: 404 })
-
-    const { circle_user_id, wallet_id } = row.rows[0]
+    const circle_user_id = user.circle_user_id
+    const wallet_id = user.wallet_id!
 
     const tokenRes  = await fetch(`${BASE}/v1/w3s/users/token`, {
       method:  "POST",
